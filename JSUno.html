@@ -1,0 +1,812 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <title>JSUno</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <script src="http://cdn.peerjs.com/0.3.14/peer.min.js"></script>
+    <link href="https://fonts.googleapis.com/css?family=Ubuntu" rel="stylesheet">
+    <script>
+function gE(e) { return document.getElementById(e); }
+function gS(e) { return document.getElementById(e).style; }
+function l(d) { console.log(d); }
+
+function randKey() { return (Math.random() * 100000 + 4096).toString(16).split(".").join("").substr(0, 4).toUpperCase(); }
+
+var pc_config = { 'iceServers':
+    [
+        { url: 'stun:stun.1.google.com:19302' },
+        { url: 'turn:numb.viagenie.ca', credential: 'muazkh', username: 'webrtc@live.com' },
+        { url: 'turn:numb.viagenie.ca:3478', username: 'phunanon@gmail.com', credential: 'aoeuidH1' },
+{url:'stun:stun01.sipphone.com'},
+{url:'stun:stun.ekiga.net'},
+{url:'stun:stun.fwdnet.net'},
+{url:'stun:stun.ideasip.com'},
+{url:'stun:stun.iptel.org'},
+{url:'stun:stun.rixtelecom.se'},
+{url:'stun:stun.schlund.de'},
+{url:'stun:stun.l.google.com:19302'},
+{url:'stun:stun1.l.google.com:19302'},
+{url:'stun:stun2.l.google.com:19302'},
+{url:'stun:stun3.l.google.com:19302'},
+{url:'stun:stun4.l.google.com:19302'},
+{url:'stun:stunserver.org'},
+{url:'stun:stun.softjoys.com'},
+{url:'stun:stun.voiparound.com'},
+{url:'stun:stun.voipbuster.com'},
+{url:'stun:stun.voipstunt.com'},
+{url:'stun:stun.voxgratia.org'},
+{url:'stun:stun.xten.com'},
+{
+    url: 'turn:numb.viagenie.ca',
+    credential: 'muazkh',
+    username: 'webrtc@live.com'
+},
+{
+    url: 'turn:192.158.29.39:3478?transport=udp',
+    credential: 'JZEOEt2V3Qb0y27GRntt2u2PAYA=',
+    username: '28224511:1379330808'
+},
+{
+    url: 'turn:192.158.29.39:3478?transport=tcp',
+    credential: 'JZEOEt2V3Qb0y27GRntt2u2PAYA=',
+    username: '28224511:1379330808'
+}
+    ]
+};
+var socket = new Peer(randKey(), { key: '8fgu0lwnmefusor',
+                                   debug: 2,
+                                   logFunction: function() { var copy = Array.prototype.slice.call(arguments).join(' '); console.log(copy);}, config: pc_config
+                                 }
+                     );
+var pName = "Player";
+var pID = ""; //Peer ID
+var peers = []; //Connections to our peers if we're game master {id: "peer id", conn: connection, name: "name"}
+var peerAmount = 0; //Amount of peers
+var players = []; //In game players {id: "peer id", name: name} - note, even though peer id is saved, it is never used
+var playerAmount = 0; //Amount of players
+var areMaster = true; //Are we Game Master?
+var gameMaster = ""; //What is the Game Master's ID?
+var masterConn; //Connection to our master
+var gameOwner = "Nobody"; //Who is the game owner?
+var playing = false; //Playing flag
+
+var STARTINGCARDS = 7;
+var deck = []; //The deck of cards, held by the master { num: 0-13, col: 0 }
+var playerCardAmounts = [] //Amount of cards each player has, known to the master
+var ourHand = []; //Our hand of cards
+var pile; //The pile card
+var turn = 0; //Whose turn is it?
+var turnDir = 1; //Direction of play
+var freezeTurn = false; //Flag to freeze turn (to prevent double play)
+
+function stat (str, r, g, b)
+{
+    gE("statmajor").innerHTML = str;
+    gE("statminor").innerHTML =  gameOwner + "'s game.";
+    gS("status").backgroundColor = "rgb(" + r + ", " + g + ", " + b + ")";
+}
+
+function loadPage ()
+{
+  //Get our PID
+    stat("Connecting to server...", 255, 255, 0);
+    socket.on('open', function (id) { //Upon issue
+        pID = id;
+        gE("yourid").innerHTML = pID;
+        stat("Connected to server.", 0, 255, 0);
+      //Get this player's name
+        pName = prompt("Please enter your name", pName);
+        pName = pName.trim();
+        gameOwner = pName;
+        //Add us to the game
+        addPlayer(0, pID, pName, 0);
+        playerCardAmounts.push(0);
+        stat("Ready to begin.", 150, 150, 150);
+      //Prepare to be connected to
+        socket.on('connection', connect);
+    });
+    notif("Welcome to JSUno!");
+}
+
+
+function oops (err) //Our socket had a little accident
+{
+    l(err);
+}
+
+function connect (conn) //Being connected to by a game master
+{
+    masterConn = conn;
+    gameMaster = conn.peer;
+    //Listen for errors
+    masterConn.on('err', oops);
+  //We are now a slave
+    areMaster = false;
+  //Superficial
+    gS("mastercontrols").display = gS("callingcard").display = gS("instructions").display = "none";
+    gameOwner = "Unknown";
+    stat("Being connected to...", 255, 255, 0);
+  //Start listening to the master
+    masterConn.on('open', function () {
+        masterConn.on('data', listen);
+      //Respond with our name
+        masterSay("intro", pName);
+    });
+}
+
+function setPeerName (id, name) //Update the name of a peer in our list (as master)
+{
+    for (var p = 0; p < peerAmount; ++p) {
+        if (peers[p].id == id) {
+            peers[p].name = name;
+            return;
+        }
+    }
+}
+
+function listen (heard) //Listen for incoming data
+{
+    l('Heard from ' + heard.id + ': ' + heard.dataName + ': ' + heard.data);
+    if (heard.id == gameMaster) {   //Was this data from our master?
+        switch (heard.dataName) {
+            case "intro": //Master has added us, and responded with their name
+                gameOwner = heard.data;
+                stat("Connected to game!", 100, 100, 255);
+                //addPlayer(gameMaster, gameOwner);
+                setTimeout('if (!playing) { stat("Waiting for game start.", 0, 255, 0); }', 2000);
+                break;
+            case "playerlist": //Master has sent us the list of players for this game
+                players = heard.data;
+                playerAmount = players.length;
+                renderPlayers();
+                startPlay();
+                break;
+            case "newcards": //Master has sent us some cards for our hand
+                ourHand = ourHand.concat(heard.data);
+                renderHand();
+                break;
+            case "pile": //Master has told us the new pile
+                pile = heard.data;
+                renderPile();
+                break;
+            case "playercards": //Master has sent us the amount of people's cards
+                playerCardAmounts = heard.data;
+                renderPlayers();
+                break;
+            case "turn": //Master has told us whose turn it is
+                turn = heard.data.turn;
+                turnDir = heard.data.turnDir;
+                renderPlayers();
+                if (ourTurn()) {
+                    notif("Your turn!");
+                }
+                renderHand(); //It might be our turn
+                freezeTurn = false; //To unlock our turn, IF it is our turn
+                break;
+            case "noti": //Master has a notification!
+                notif(heard.data);
+                break;
+        }
+    } else {                    //Was this data from one of our slaves?
+        switch (heard.dataName) {
+            case "intro": //Slave has responded with their name
+                setPeerName(heard.id, heard.data);
+              //Superficially add player to the game (as master)
+                addPlayer(playerAmount, heard.id, heard.data, 0);
+                stat("Added " + heard.data + "!", 150, 150, 255);
+                setTimeout('if (!playing) { stat("Ready to start.", 0, 255, 0); }', 2000);
+                break;
+            case "pilecard": //Slave wants to place a card into the pile
+                changePile(heard.id, heard.data);
+                break;
+            case "skip": //The slave wants to skip
+                nextTurn();
+                break;
+            case "pickup": //The slave wants to pickup
+                pickupCard(heard.id, 1);
+                break;
+        }
+    }
+}
+
+function say (to, dataName, data = '') //Talk to a peer (in the peer list)
+{
+    peers[to].conn.send( { id: pID, dataName: dataName, data: data } );
+}
+function masterSay (dataName, data = '') //Talk to our master
+{
+    masterConn.send( { id: pID, dataName: dataName, data: data } );
+}
+
+var tryingToConnectTo = "";
+function addPeer ()
+{
+    var nPID = prompt("Enter the player's ID");
+    if (nPID == "") { return; }
+  //Try to connect to new peer
+    var thisConn = socket.connect(nPID);
+    thisConn.on('open', function () {
+        stat("Adding new player...", 150, 150, 255);
+        gS("startGame").display = 'inline-block';
+      //We are game-master
+        areMaster = true;
+      //Begin listening to the new peer
+        peers[peerAmount - 1].conn.on('data', listen);
+      //Tell new peer we have added them (respond with our name)
+        say(peerAmount - 1, "intro", pName);
+    });
+  //Add this peer to our list
+    peers.push( { id: nPID, conn: thisConn, name: "Unknown" } );
+    ++peerAmount;
+  //Superficial
+    stat("Connecting to " + nPID.substr(0, 4) + "...", 255, 255, 0);
+    gS("callingcard").display = gS("instructions").display = "none";
+}
+
+var noting = false;
+function notif (noti) //Generate notification (as master or slave)
+{
+    if (!noting) { //Ignore notis while we already have one
+        noting = true;
+        if (areMaster) { //Broadcast noti
+            for (var p = 0; p < peerAmount; ++p) {
+                say(p, "noti", noti);
+            }
+        }
+      //Display noti
+        gE("noti").innerHTML = noti;
+        gS("noti").display = "block";
+        setTimeout('gS("noti").opacity = 1;', 200); //An immediate opacity spike would not show up
+        setTimeout('gS("noti").opacity = 0; noting = false;', 3200);
+        setTimeout('gS("noti").display = "none";', 4200);
+    }
+}
+
+function incTurn () //Return next turn number
+{
+    var ret = turn + turnDir;
+    if (ret == playerAmount) { ret = 0; }
+     else if (ret < 0) { ret = playerAmount - 1; }
+    return ret;
+}
+
+function nextTurn (update = true) //Go to the next player, as master
+{
+    turn = incTurn();
+    if (update) { //Is this not a skip?
+      //Update all peers with new playerCardAmounts, pile, turn
+        for (var p = 0; p < peerAmount; ++p) {
+            say(p, "pile", pile);
+            say(p, "playercards", playerCardAmounts);
+            say(p, "turn", { turn: turn, turnDir, turnDir } );
+        }
+        if (ourTurn()) {
+            notif("Your turn!");
+        }
+        renderPlayers();
+        renderHand(); //It might be our turn
+    }
+    freezeTurn = false; //To unlock our turn, IF it is our turn
+}
+
+function changePile (by, card) //Replace the top card on the pile, as master
+{
+    deck.push(pile);
+    pile = card;
+    if (by == pID) {
+        --playerCardAmounts[0];
+    } else {
+        reduceCards(by);
+    }
+  //React to amount of cards
+    for (var p = 0; p < playerAmount; ++p) {
+        if (playerCardAmounts[p] == 0) {
+            notif(players[p].name + " wins!");
+            break;
+        }
+    }
+    var player; //Player who placed the card
+    for (var p = 0; p < playerAmount; ++p) {
+        if (players[p].id == by) {
+            player = players[p];
+            break;
+        }
+    }
+  //React to this card
+    switch (parseInt(pile.num)) {
+        case 10: //Skip next player
+            nextTurn(false);
+            notif(players[turn].name + " loses a turn!");
+            break;
+        case 11: //Switch direction
+            turnDir = -turnDir;
+            notif(player.name + " reversed play!");
+            break;
+        case 12: //Pick up two
+            pickupCard(players[incTurn()].id, 2);
+            notif(players[incTurn()].name + " has to pick up 2!");
+            break;
+        case 13: //Wildcard
+            notif(player.name + " changed the colour!");
+            break;
+        case 14: //Wildcard +4
+            pickupCard(players[incTurn()].id, 4);
+            notif(players[incTurn()].name + " has to pick up 4!");
+            break;
+    }
+    renderPile();
+    nextTurn();
+}
+
+function pickupCard (id, amount) //Pick up a card for a player
+{
+    for (var p = 0; p < playerAmount; ++p) {
+        if (players[p].id == id) {
+            for (var c = 0; c < amount; ++c) { //(bit messy, but, oh well)
+                if (id == pID) {
+                    ourHand = ourHand.concat([deck[0]]);
+                    renderHand();
+                } else {
+                    say(p - 1, "newcards", [deck[0]]);
+                }
+                deck.splice(0, 1);
+                ++playerCardAmounts[p];
+            }
+            break;
+        }
+    }
+  //Update all peers with new playerCardAmounts
+    for (var p = 0; p < peerAmount; ++p) {
+        say(p, "playercards", playerCardAmounts);
+    }
+    renderPlayers();
+}
+
+function reduceCards (id) //Reduce registered amount of cards of player
+{
+    for (var p = 0; p < playerAmount; ++p) {
+        if (players[p].id == id) {
+            --playerCardAmounts[p];
+            break;
+        }
+    }
+}
+
+function renderPlayers () //Superficially add players to the game
+{
+    gE("players").innerHTML = '';
+    for (var p = 0; p < playerAmount; ++p) {
+        addPlayer(p, players[p].id, players[p].name, playerCardAmounts[p]);
+    }
+    gE("players").classList.remove("leftTurn");
+    gE("players").classList.remove("rightTurn");
+    gE("players").classList.add(turnDir == 1 ? 'rightTurn' : 'leftTurn');
+}
+
+function renderPile () //Superficially update pile
+{
+    gE("pile").innerHTML = '<div style="position: absolute; width: 100%; height: 100%; z-index: 100;"></div>' + renderCard(pile.num, pile.col);
+    col = cardCols[pile.col];
+    gS("bg").backgroundColor = col;
+}
+
+function renderHand () //Superficially update hand
+{
+    gE("hand").innerHTML = '';
+    for (var c = 0; c < ourHand.length; ++c) {
+        gE("hand").innerHTML += renderCard(ourHand[c].num, ourHand[c].col);
+    }
+    gS("hand").opacity = (ourTurn() ? 1 : 0.5);
+    gS("skipturn").visibility = (ourTurn() ? 'visible' : 'hidden');
+}
+
+function f(n) { return Math.floor(n); }
+var ct = 1.6; //Colour tweak
+function addPlayer (n, id, name, cards) //Superficially add player to game
+{
+    var color = '#' + f(name.charCodeAt(0) * ct).toString(16) + f(name.charCodeAt(1) * ct).toString(16) + f(name.charCodeAt(2) * ct).toString(16);
+    gE("players").innerHTML += '<span style="background-color: ' + (turn == n && playing? '#000' : color) + '" id="p' + id + '" class="player">' + name.substr(0, 2) + '<br/>' + cards + '</span>';
+}
+
+function startGame () //Start game, as master
+{
+  //Update all peers with a list of players
+    //Create the list
+    players.push( { id: pID, name: pName } );
+    for (var p = 0; p < peerAmount; ++p) {
+        players.push( { id: peers[p].id, name: peers[p].name } );
+    }
+    //Send the list out
+    for (var p = 0; p < peerAmount; ++p) {
+        say(p, "playerlist", players);
+    }
+    //Prepare our list
+    playerAmount = peerAmount + 1;
+  //Deal everybody, including ourselves, some cards
+    //Prepare the deck (15x4 + 13x4)
+    for (var p = 0; p < 2; ++p) {
+        for (var n = 0; n < (p ? 13 : 15); ++n) {
+            for (var c = 0; c < 4; ++c) {
+                deck.push( { num: n, col: c } );
+            }
+        }
+    }
+    deck.sort(function () { return (Math.random() > 0.5 ? 1 : -1); });
+    //For each player, set aside some cards
+    var playerCards = [];
+    for (var p = 0; p < playerAmount; ++p) {
+        playerCards.push([]);
+        playerCardAmounts.push(0);
+        for (var c = 0; c < STARTINGCARDS; ++c) {
+            playerCards[p].push(deck[0]);
+            deck.splice(0, 1);
+        }
+        playerCardAmounts[p] = STARTINGCARDS;
+    }
+    //Deal out their cards
+    for (var p = 0; p < peerAmount; ++p) {
+        say(p, "newcards", playerCards[p]);
+    }
+    //Deal out our cards
+    for (var c = 0; c < STARTINGCARDS; ++c) {
+        ourHand.push(deck[0]);
+        deck.splice(0, 1);
+    }
+    renderHand();
+    //Set the pile head
+    pile = deck[0];
+    deck.splice(0, 1);
+    renderPile(pile);
+    //Tell all peers
+    for (var p = 0; p < peerAmount; ++p) {
+        say(p, "pile", pile);
+    }
+  //Update all peers with initial playerCardAmounts
+    for (var p = 0; p < peerAmount; ++p) {
+        say(p, "playercards", playerCardAmounts);
+    }
+  //We're playing!
+    startPlay();
+}
+
+function startPlay () //Start game, as a player
+{
+    stat("Playing!", 100, 200, 200);
+    playing = true;
+    gS("dash").display = 'none';
+    //Render the pickup card
+    gE("pickup").innerHTML = renderCard(0, 4);
+    renderPlayers();
+}
+
+var cardCols = ['#faa', '#afa', '#aaf', '#dd3', 4];
+function renderCard (num, col) //Accepts 0 to 13 (0 to wildcard), then 0 to 3 (and 4 being pickup card)
+{
+    card = '<span class="card" onclick="clickCard(this)" data-num="' + num + '" data-col="' + col + '" style="background-color: ';
+    col = cardCols[col];
+    if        (col == 4) {               //This is a superficial pickup card
+        return card + '#888"><span>&nbsp;<br/>?</span></span>';
+    } else if (num >= 0 && num <= 9) {   //This is a plain ol' number card
+        return card + col + '"><span>' + num + '<br/>&nbsp;</span></span>';
+    } else if (num > 9 && num < 13) {    //This is a special card
+        special = (num == 10 ? 'X' : (num == 11 ? '↷' : '+2')); // '⃠'
+        return card + col + '"><span>&nbsp;<br/>' + special + '</span></span>';
+    } else if (num == 13) {              //This is a wild card
+        return card + '#000;"><span>w<br/>&nbsp;</span></span>';
+    } else if (num == 14) {              //This is a super wild card
+        return card + '#000;"><span>w<br/>+4</span></span>';
+    }
+    return "?";
+}
+
+var wildNum; //Num of wildcard clicked
+function clickCard (card) //Click a card trigger
+{
+    if (card.dataset.col == 4) { //They clicked the pickup card
+        if (ourTurn()) {
+            if (areMaster) {
+                pickupCard(pID, 1);
+            } else {
+                masterSay("pickup");
+            }
+        }
+    } else { //They clicked a card in their hand
+        if (ourTurn() && !freezeTurn) {
+            freezeTurn = true;
+            if (card.dataset.num == 13 || card.dataset.num == 14) { //Wild card?
+                openColourChoose(card.dataset.num);
+            } else if (card.dataset.num == pile.num || card.dataset.col == pile.col) { //Can this card go on the pile?
+                if (areMaster) {
+                    changePile(pID, { num: card.dataset.num, col: card.dataset.col } );
+                } else {
+                  //Tell the master
+                    masterSay("pilecard", { num: card.dataset.num, col: card.dataset.col } );
+                }
+                //Remove it from our hand
+                for (var c = 0; c < ourHand.length; ++c) {
+                    if (ourHand[c].num == card.dataset.num && ourHand[c].col == card.dataset.col) {
+                        ourHand.splice(c, 1);
+                        break;
+                    }
+                }
+                renderHand();
+            } else {
+                freezeTurn = false;
+            }
+        }
+    }
+}
+
+function openColourChoose (num) //Open the colour choose dialog, from a wildcard
+{
+    wildNum = num;
+    gS("colourchdiv").display = "block";
+}
+
+function colourChose (col) //Accept colour from the colour choose dialog
+{
+    gS("colourchdiv").display = "none";
+  //Tell master of our wildcard choice
+    if (areMaster) {
+        changePile(pID, { num: wildNum, col: col } );
+    } else {
+      //Tell the master
+        masterSay("pilecard", { num: wildNum, col: col } );
+    }
+    //Remove it from our hand
+    for (var c = 0; c < ourHand.length; ++c) {
+        if (ourHand[c].num == wildNum) {
+            ourHand.splice(c, 1);
+            break;
+        }
+    }
+    renderHand();
+}
+
+function skipTurn () //Skip our turn
+{
+    if (areMaster) {
+        nextTurn();
+    } else {
+        masterSay("skip");
+    }
+}
+
+function ourTurn () //Returns if it's our turn
+{
+    return players[turn].id == pID;
+}
+    </script>
+
+
+
+
+    <style>
+* {
+    padding: 0;
+    margin: 0;
+    font-family: 'Ubuntu', sans-serif;
+    transition: all 1s ease-in-out;
+    user-select: none;
+}
+
+html, body {
+    height: 100%;
+    overflow: visible;
+}
+
+#scroller {
+    overflow-y: scroll;
+    height: 100%;
+}
+
+p {
+    margin: .5rem;
+}
+
+btn {
+    display: inline-block;
+    margin: .5rem;
+    padding: .2rem;
+    background-color: #ddd;
+    cursor: pointer;
+    border: .1rem solid #aaa;
+    font-size: 1.2rem;
+    box-shadow: .1rem .1rem .1rem rgba(0, 0, 0, 0.5);
+    transition: all .5s ease-in-out;
+}
+btn:hover { background-color: #eef; }
+btn:active { background-color: #ddf; box-shadow: .1rem .1rem .1rem rgba(0, 0, 0, 0.5) inset; }
+
+section {
+    padding: .5rem;
+}
+
+#bg {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    opacity: .5;
+    z-index: -1;
+}
+
+#yourid {
+    user-select: all;
+    background-color: #bbf;
+    font-weight: bold;
+    font-family: mono;
+    font-size: 1.2rem;
+    padding: .2rem;
+    box-shadow: .1rem .1rem .1rem rgba(0, 0, 0, 0.5);
+}
+
+#status {
+    padding: 1rem;
+    text-align: center;
+}
+#statmajor { font-size: 1.5rem; }
+#statminor { font-size: 1.2rem; }
+
+#noti {
+    opacity: 0;
+    display: none;
+    bottom: 0;
+    position: absolute;
+    width: 100%;
+    background-color: #555;
+    color: #fff;
+    padding: 1rem 0rem;
+    text-align: center;
+    font-size: 1.4rem;
+}
+
+.deck {
+    display: inline-block;
+    width: 5.4rem;
+    height: 7rem;
+    border: .1rem solid #000;
+    border-radius: .2rem;
+    vertical-align: top;
+    text-align: center;
+    padding-top: .8rem;
+    margin: 1rem;
+    background-image: url(http://static3.grsites.com/archive/textures/wood/wood016.jpg);
+    position: relative;
+}
+
+#pile .card {
+    cursor: default;
+}
+
+#players {
+    vertical-align: top;
+    position: relative;
+    display: inline-block;
+    margin-left: 2rem;
+}
+#players.leftTurn:after, #players.rightTurn:after {
+    content: "";
+    top: 2rem;
+    position: absolute;
+}
+#players.leftTurn:after {
+    border-top: 1rem solid transparent;
+    border-bottom: 1rem solid transparent;
+    border-right: 1rem solid #000;
+    left: -1rem;
+}
+#players.rightTurn:after {
+    border-top: 1rem solid transparent;
+    border-bottom: 1rem solid transparent;
+    border-left: 1rem solid #000;
+    right: -1rem;
+}
+
+.player {
+    display: inline-block;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 100% 100% 0% 0%;
+    margin: .5rem;
+    color: #fff;
+    text-align: center;
+    vertical-align: middle;
+    font-size: 1.2rem;
+    padding-top: 1rem;
+}
+
+.card {
+    display: inline-block;
+    width: 4rem;
+    height: 6rem;
+    border: .1rem solid #000;
+    border-radius: .8rem;
+    box-shadow: .1rem .1rem .1rem rgba(0, 0, 0, 0.5);
+    box-shadow: inset .0rem .0rem 0rem .4rem rgba(255, 255, 255, 1);
+    position: relative;
+    margin: .1rem;
+    opacity: .8;
+    transition: none;
+    cursor: pointer;
+}
+.card:hover {
+    opacity: 1;
+    border: .2rem solid #000;
+    margin: 0rem;
+}
+.deck .card { opacity: 1; }
+.deck .card:hover { border: .1rem solid #000; margin: .1rem; }
+.card span {
+    text-align: center;
+    display: block;
+    padding-top: 1rem;
+    font-size: 1.8rem;
+    color: #fff;
+    font-weight: bold;
+}
+
+#colourchdiv {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    padding-top: 2rem;
+    display: none;
+    z-index: 100;
+}
+#colourchoose {
+    display: block;
+    width: 8rem;
+    height: 9.1rem;
+    margin: auto;
+    background-color: #fff;
+    border: .1rem solid #000;
+    text-align: center;
+    padding: .2rem;
+}
+#colourchoose span {
+    display: inline-block;
+    width: 4rem;
+    height: 4rem;
+    float: left;
+    cursor: pointer;
+}
+
+/*background-image: url(https://upload.wikimedia.org/wikipedia/commons/9/95/UNO_cards_deck.svg);
+background-size: 1390% 800%;
+background-position: 7.69333333333% 14.266666667%;*/
+    </style>
+</head>
+<body onload="loadPage();">
+    <div id="bg"></div>
+    <div id="scroller">
+        <div id="status"><span id="statmajor">Loading game...</span><br/><span id="statminor"></span></div>
+        <div id="colourchdiv">
+            <div id="colourchoose">
+                Choose colour
+                <span style="background-color: #faa" onclick="colourChose(0)"></span>
+                <span style="background-color: #afa" onclick="colourChose(1)"></span>
+                <span style="background-color: #aaf" onclick="colourChose(2)"></span>
+                <span style="background-color: #dd3" onclick="colourChose(3)"></span>
+            </div>
+        </div>
+        <section id="dash">
+            <p id="instructions"><b>Either give your ID to another person, or ask for theirs!</b></p>
+            <p id="callingcard">Your ID: <span id="yourid"><i>asking server...</i></span></p>
+            <p id="mastercontrols">
+                <btn onclick="addPeer()">Add a player!</btn>
+                <btn onclick="startGame()" id="startGame" style="display: none;">Start game!</btn>
+            </p>
+        </section>
+        <section id="game">
+            <div id="players"></div>
+            <hr/>
+            <span id="pickup" class="deck">pickup</span>
+            <span id="pile" class="deck">pile</span>
+            <br/><btn id="skipturn" onclick="skipTurn();">Skip turn</btn>
+            <div id="hand"></div>
+        </section>
+    </div>
+    <div id="noti">By Patrick Bowen [phunanon]</div>
+</body>
+</html>
